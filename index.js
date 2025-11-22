@@ -164,8 +164,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // /draftvc – show preferences for people in your voice channel
       if (cmd === 'draftvc') {
-        // Use member.voice; guild.voiceStates can be null in some setups
-        const member = interaction.member;
+        const guild = interaction.guild;
+        if (!guild) {
+          return interaction.reply({
+            content: 'This command can only be used in a server.',
+            ephemeral: true
+          });
+        }
+
+        // Fetch full member so we get accurate voice state
+        let member;
+        try {
+          member = await guild.members.fetch(interaction.user.id);
+        } catch (e) {
+          console.error('❌ Failed to fetch member:', e);
+          return interaction.reply({
+            content:
+              'Could not load your member info. Try again in a moment.',
+            ephemeral: true
+          });
+        }
+
         const voiceChannel = member?.voice?.channel;
 
         if (!voiceChannel) {
