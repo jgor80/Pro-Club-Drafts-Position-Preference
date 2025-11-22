@@ -8,16 +8,17 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
-// ===== BASIC SETUP =====
+// =======================
+// BASIC SETUP
+// =======================
 
-// Get token from environment variable only
 const token = process.env.BOT_TOKEN;
 if (!token) {
   console.error('❌ BOT_TOKEN env var not set');
   process.exit(1);
 }
 
-// Include GuildVoiceStates so we can see who is in VC
+// Need Guilds + GuildVoiceStates so we can see who is in voice channels
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates]
 });
@@ -37,21 +38,25 @@ const POSITIONS = [
   'GK'
 ];
 
-// positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... up to 11 ], updatedAt: Date }
+// positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... ], updatedAt: Date }
 const positionPrefs = new Map();
 
-// ===== HELPERS =====
+// =======================
+// HELPERS
+// =======================
 
 // Build the "your prefs" embed
 function buildPrefsEmbed(selected) {
+  const list = selected || [];
   let desc;
-  if (!selected || selected.length === 0) {
+
+  if (list.length === 0) {
     desc =
       'No positions selected yet.\n' +
       'Click the buttons below to add up to **11** positions in order of preference.\n' +
       'Click a selected position again to remove it.';
   } else {
-    const lines = selected.map((p, i) => `${i + 1}. **${p}**`).join('\n');
+    const lines = list.map((p, i) => `${i + 1}. **${p}**`).join('\n');
     desc =
       'Your current preferences:\n' +
       lines +
@@ -68,11 +73,12 @@ function buildPrefsEmbed(selected) {
 
 // Build the position buttons + control buttons for the prefs panel
 function buildPrefComponents(selected) {
+  const list = selected || [];
   const rows = [];
   let currentRow = new ActionRowBuilder();
 
   POSITIONS.forEach((pos, index) => {
-    const isSelected = selected.includes(pos);
+    const isSelected = list.includes(pos);
     const button = new ButtonBuilder()
       .setCustomId(`prefpos_${pos}`)
       .setLabel(pos)
@@ -102,21 +108,31 @@ function buildPrefComponents(selected) {
   return rows;
 }
 
-// ===== READY =====
+// =======================
+// READY
+// =======================
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   console.log(`✅ App ID: ${c.application.id}`);
 
   await c.application.commands.set([
-    { name: 'prefs', description: 'Open your position preference panel (buttons).' },
-    { name: 'draftvc', description: 'Show position preferences for players in your voice channel.' }
+    {
+      name: 'prefs',
+      description: 'Open your position preference panel (buttons).'
+    },
+    {
+      name: 'draftvc',
+      description: 'Show position preferences for players in your voice channel.'
+    }
   ]);
 
   console.log('✅ Commands registered: /prefs, /draftvc');
 });
 
-// ===== INTERACTIONS =====
+// =======================
+// INTERACTION HANDLER
+// =======================
 
 client.on(Events.InteractionCreate, async (interaction) => {
   console.log('🔔 Interaction received:', {
@@ -128,6 +144,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   });
 
   try {
+    // Ignore DMs
     if (!interaction.guildId || !interaction.channelId) return;
 
     // ---------- SLASH COMMANDS ----------
@@ -136,8 +153,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // /prefs – open interactive button panel (ephemeral)
       if (cmd === 'prefs') {
-        const existing =
-          positionPrefs.get(interaction.user.id)?.prefs || [];
+        const existing = positionPrefs.get(interaction.user.id)?.prefs || [];
 
         return interaction.reply({
           embeds: [buildPrefsEmbed(existing)],
@@ -233,6 +249,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ephemeral: false
         });
       }
+
+      // If some other command sneaks through
+      return interaction.reply({
+        content: 'Unknown command.',
+        ephemeral: true
+      });
     }
 
     // ---------- BUTTONS (prefs panel) ----------
@@ -256,8 +278,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           // Not selected → add if under 11
           if (newPrefs.length >= 11) {
-            // Use ephemeral reply, but since this is a button interaction,
-            // we need to reply separately (not update the main message)
+            // Separate ephemeral reply (not update) so we don't break the panel
             return interaction.reply({
               content:
                 'You already selected 11 positions. Click one of your selected positions again to remove it first.',
@@ -315,13 +336,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (err) {
     console.error('❌ Error handling interaction:', err);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: 'Error.',
-        ephemeral: true
-      });
+
+    // Try to send a more useful error back to Discord
+    try {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: `Error: ${err.message || 'something went wrong.'}`,
+          ephemeral: true
+        });
+      }
+    } catch (e) {
+      console.error('❌ Failed to send error reply:', e);
     }
   }
 });
+
+// =======================
+// LOGIN
+// =======================
 
 client.login(token);
