@@ -164,38 +164,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // /draftvc – show preferences for people in your voice channel
       if (cmd === 'draftvc') {
-        // Make sure this is in a guild
-        if (!interaction.guildId) {
+        // Get the guild from cache
+        const guild = interaction.client.guilds.cache.get(interaction.guildId);
+        if (!guild) {
+          console.error(
+            '❌ Guild not in cache for guildId:',
+            interaction.guildId
+          );
           return interaction.reply({
-            content: 'Please run this command in a server text channel (not in DMs).',
+            content:
+              'Bot cannot see this server in its cache yet. Try again in a few seconds.',
             ephemeral: true
           });
         }
 
-        // Fetch the guild and member to get accurate voice state
-        let guild;
-        try {
-          guild = await client.guilds.fetch(interaction.guildId);
-        } catch (e) {
-          console.error('❌ Failed to fetch guild:', e);
-          return interaction.reply({
-            content: 'Could not load server info. Try again in a moment.',
-            ephemeral: true
-          });
-        }
-
-        let member;
-        try {
-          member = await guild.members.fetch(interaction.user.id);
-        } catch (e) {
-          console.error('❌ Failed to fetch member:', e);
-          return interaction.reply({
-            content: 'Could not load your member info. Try again in a moment.',
-            ephemeral: true
-          });
-        }
-
-        const voiceChannel = member?.voice?.channel;
+        // Get your voice state from the guild's voiceStates cache
+        const voiceState = guild.voiceStates.cache.get(interaction.user.id);
+        const voiceChannel = voiceState?.channel;
 
         if (!voiceChannel) {
           return interaction.reply({
