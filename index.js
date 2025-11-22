@@ -164,11 +164,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // /draftvc – show preferences for people in your voice channel
       if (cmd === 'draftvc') {
-        // Use voice state cache so it works reliably
-        const voiceState = interaction.guild.voiceStates.cache.get(
-          interaction.user.id
-        );
-        const voiceChannel = voiceState?.channel;
+        // Use member.voice; guild.voiceStates can be null in some setups
+        const member = interaction.member;
+        const voiceChannel = member?.voice?.channel;
 
         if (!voiceChannel) {
           return interaction.reply({
@@ -250,7 +248,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      // If some other command sneaks through
+      // Fallback if some unknown command sneaks through
       return interaction.reply({
         content: 'Unknown command.',
         ephemeral: true
