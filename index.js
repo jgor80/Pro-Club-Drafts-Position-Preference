@@ -5,10 +5,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  EmbedBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle
+  EmbedBuilder
 } = require('discord.js');
 
 // Get token from environment variable only
@@ -41,12 +38,64 @@ const POSITIONS = [
 // positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... up to 6 ], updatedAt: Date }
 const positionPrefs = new Map();
 
-// Normalize and validate a position string
-function normalizePosition(input) {
-  if (!input) return null;
-  const pos = input.trim().toUpperCase();
-  if (!POSITIONS.includes(pos)) return null;
-  return pos;
+// Build the "your prefs" embed
+function buildPrefsEmbed(selected) {
+  let desc;
+  if (!selected || selected.length === 0) {
+    desc =
+      'No positions selected yet.\n' +
+      'Click the buttons below to add up to **6** positions in order of preference.\n' +
+      'Click a selected position again to remove it.';
+  } else {
+    const lines = selected.map((p, i) => `${i + 1}. **${p}**`).join('\n');
+    desc =
+      'Your current preferences:\n' +
+      lines +
+      '\n\nYou can click more buttons to add (up to 6) or click a selected one to remove it.';
+  }
+
+  return new EmbedBuilder()
+    .setTitle('Rank Your Positions')
+    .setDescription(
+      desc +
+        '\n\nPositions: `ST, RW, LW, CAM, RDM, LDM, LB, LCB, RCB, RB, GK`'
+    );
+}
+
+// Build the position buttons + control buttons for the prefs panel
+function buildPrefComponents(selected) {
+  const rows = [];
+  let currentRow = new ActionRowBuilder();
+
+  POSITIONS.forEach((pos, index) => {
+    const isSelected = selected.includes(pos);
+    const button = new ButtonBuilder()
+      .setCustomId(`prefpos_${pos}`)
+      .setLabel(pos)
+      .setStyle(isSelected ? ButtonStyle.Success : ButtonStyle.Secondary);
+
+    currentRow.addComponents(button);
+
+    if (currentRow.components.length === 5 || index === POSITIONS.length - 1) {
+      rows.push(currentRow);
+      currentRow = new ActionRowBuilder();
+    }
+  });
+
+  // Control row: Done / Clear
+  const controlRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('prefs_done')
+      .setLabel('Done')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('prefs_clear')
+      .setLabel('Clear')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  rows.push(controlRow);
+  return rows;
 }
 
 client.once(Events.ClientReady, async (c) => {
@@ -54,7 +103,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`✅ App ID: ${c.application.id}`);
 
   await c.application.commands.set([
-    { name: 'prefs', description: 'Show panel so players can rank their positions.' },
+    { name: 'prefs', description: 'Open your position preference panel (buttons).' },
     { name: 'draftvc', description: 'Show position preferences for players in your voice channel.' }
   ]);
 
@@ -77,26 +126,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       const cmd = interaction.commandName;
 
-      // /prefs – show "Rank My Positions" panel
+      // /prefs – open interactive button panel (ephemeral)
       if (cmd === 'prefs') {
-        const embed = new EmbedBuilder()
-          .setTitle('Rank Your Positions')
-          .setDescription(
-            'Click the button below and enter up to 6 positions in order of preference.\n' +
-              'Use codes like: ST, RW, LW, CAM, RDM, LDM, LB, LCB, RCB, RB, GK.\n\n' +
-              '**Format:** one position per line (top = most wanted).'
-          );
-
-        const buttonRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('rank_positions')
-            .setLabel('Rank My Positions')
-            .setStyle(ButtonStyle.Primary)
-        );
+        const existing =
+          positionPrefs.get(interaction.user.id)?.prefs || [];
 
         return interaction.reply({
-          embeds: [embed],
-          components: [buttonRow]
+          embeds: [buildPrefsEmbed(existing)],
+          components: buildPrefComponents(existing),
+          ephemeral: true
         });
       }
 
@@ -112,7 +150,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const members = [...voiceChannel.members.values()].filter((m) => !m.user.bot);
+        const members = [...voiceChannel.members.values()].filter(
+          (m) => !m.user.bot
+        );
 
         if (members.length === 0) {
           return interaction.reply({
@@ -154,7 +194,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Sort by rank (1 -> 6), then by displayName
           entries.sort((a, b) => {
             if (a.rank !== b.rank) return a.rank - b.rank;
-            return a.member.displayName.localeCompare(b.member.displayName);
+            return a.member.displayName.localeCompare(
+              b.member.displayName
+            );
           });
 
           const lines = entries.map((e) => {
@@ -176,78 +218,81 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    // ===== BUTTONS =====
+    // ===== BUTTONS (prefs panel) =====
     if (interaction.isButton()) {
-      // rank_positions – open modal for that user
-      if (interaction.customId === 'rank_positions') {
-        const modal = new ModalBuilder()
-          .setCustomId('pos_prefs_modal')
-          .setTitle('Rank Your Positions');
+      const id = interaction.customId;
 
-        const input = new TextInputBuilder()
-          .setCustomId('pref_lines')
-          .setLabel('Up to 6 positions (one per line)')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setPlaceholder('Example:\nST\nCAM\nRW\nRCB\nLB\nGK');
+      // Position buttons: prefpos_ST, prefpos_CAM, etc.
+      if (id.startsWith('prefpos_')) {
+        const pos = id.replace('prefpos_', '');
+        if (!POSITIONS.includes(pos)) return;
 
-        const row = new ActionRowBuilder().addComponents(input);
-        modal.addComponents(row);
+        const userId = interaction.user.id;
+        const current = positionPrefs.get(userId)?.prefs || [];
 
-        return interaction.showModal(modal);
-      }
-    }
+        let newPrefs = [...current];
+        const idx = newPrefs.indexOf(pos);
 
-    // ===== MODAL SUBMIT (position preferences) =====
-    if (interaction.isModalSubmit()) {
-      if (interaction.customId !== 'pos_prefs_modal') return;
-
-      const raw = interaction.fields.getTextInputValue('pref_lines') || '';
-      const lines = raw
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0)
-        .slice(0, 6); // up to 6 prefs
-
-      if (lines.length === 0) {
-        return interaction.reply({
-          content: 'Please provide at least one position.',
-          ephemeral: true
-        });
-      }
-
-      const prefs = [];
-      for (const line of lines) {
-        const pos = normalizePosition(line);
-        if (!pos) {
-          return interaction.reply({
-            content: `Invalid position "${line}". Use codes like ST, CAM, RW, GK, etc.`,
-            ephemeral: true
-          });
+        if (idx !== -1) {
+          // Already selected → remove it
+          newPrefs.splice(idx, 1);
+        } else {
+          // Not selected → add if under 6
+          if (newPrefs.length >= 6) {
+            return interaction.reply({
+              content:
+                'You already selected 6 positions. Click one of your selected positions again to remove it first.',
+              ephemeral: true
+            });
+          }
+          newPrefs.push(pos);
         }
-        prefs.push(pos);
-      }
 
-      // ensure no duplicates
-      const unique = new Set(prefs);
-      if (unique.size !== prefs.length) {
-        return interaction.reply({
-          content: 'Please do not repeat the same position. All choices must be different.',
-          ephemeral: true
+        positionPrefs.set(userId, {
+          prefs: newPrefs,
+          updatedAt: new Date()
+        });
+
+        return interaction.update({
+          embeds: [buildPrefsEmbed(newPrefs)],
+          components: buildPrefComponents(newPrefs)
         });
       }
 
-      positionPrefs.set(interaction.user.id, {
-        prefs,
-        updatedAt: new Date()
-      });
+      // Done button
+      if (id === 'prefs_done') {
+        const prefs = positionPrefs.get(interaction.user.id)?.prefs || [];
+        const summary =
+          prefs.length === 0
+            ? 'You have no positions selected yet.'
+            : 'Your saved preferences:\n' +
+              prefs.map((p, i) => `${i + 1}. **${p}**`).join('\n');
 
-      const linesOut = prefs.map((p, i) => `${i + 1}. ${p}`).join('\n');
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('Preferences Saved')
+              .setDescription(
+                summary +
+                  '\n\nYou can run `/prefs` again any time to adjust them.'
+              )
+          ],
+          components: [] // remove buttons
+        });
+      }
 
-      return interaction.reply({
-        content: `Saved your preferences:\n${linesOut}`,
-        ephemeral: true
-      });
+      // Clear button
+      if (id === 'prefs_clear') {
+        positionPrefs.set(interaction.user.id, {
+          prefs: [],
+          updatedAt: new Date()
+        });
+
+        return interaction.update({
+          embeds: [buildPrefsEmbed([])],
+          components: buildPrefComponents([])
+        });
+      }
     }
   } catch (err) {
     console.error('❌ Error handling interaction:', err);
