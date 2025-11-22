@@ -8,6 +8,8 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
+// ===== BASIC SETUP =====
+
 // Get token from environment variable only
 const token = process.env.BOT_TOKEN;
 if (!token) {
@@ -37,6 +39,8 @@ const POSITIONS = [
 
 // positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... up to 11 ], updatedAt: Date }
 const positionPrefs = new Map();
+
+// ===== HELPERS =====
 
 // Build the "your prefs" embed
 function buildPrefsEmbed(selected) {
@@ -98,6 +102,8 @@ function buildPrefComponents(selected) {
   return rows;
 }
 
+// ===== READY =====
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   console.log(`✅ App ID: ${c.application.id}`);
@@ -109,6 +115,8 @@ client.once(Events.ClientReady, async (c) => {
 
   console.log('✅ Commands registered: /prefs, /draftvc');
 });
+
+// ===== INTERACTIONS =====
 
 client.on(Events.InteractionCreate, async (interaction) => {
   console.log('🔔 Interaction received:', {
@@ -122,7 +130,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!interaction.guildId || !interaction.channelId) return;
 
-    // ===== SLASH COMMANDS =====
+    // ---------- SLASH COMMANDS ----------
     if (interaction.isChatInputCommand()) {
       const cmd = interaction.commandName;
 
@@ -138,91 +146,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-// /draftvc – show preferences for people in your voice channel
-if (cmd === 'draftvc') {
-  // Use voice state cache instead of interaction.member.voice
-  const voiceState = interaction.guild.voiceStates.cache.get(
-    interaction.user.id
-  );
-  const voiceChannel = voiceState?.channel;
+      // /draftvc – show preferences for people in your voice channel
+      if (cmd === 'draftvc') {
+        // Use voice state cache so it works reliably
+        const voiceState = interaction.guild.voiceStates.cache.get(
+          interaction.user.id
+        );
+        const voiceChannel = voiceState?.channel;
 
-  if (!voiceChannel) {
-    return interaction.reply({
-      content:
-        'You need to be **connected to a voice channel** in this server to use this.',
-      ephemeral: true
-    });
-  }
+        if (!voiceChannel) {
+          return interaction.reply({
+            content:
+              'You need to be **connected to a voice channel** in this server to use this.',
+            ephemeral: true
+          });
+        }
 
-  const members = [...voiceChannel.members.values()].filter(
-    (m) => !m.user.bot
-  );
-
-  if (members.length === 0) {
-    return interaction.reply({
-      content: 'No players found in your voice channel.',
-      ephemeral: true
-    });
-  }
-
-  // Build position -> list of { member, rank }
-  const posMap = {};
-  POSITIONS.forEach((p) => (posMap[p] = []));
-
-  members.forEach((m) => {
-    const prefs = positionPrefs.get(m.id);
-    if (!prefs || !prefs.prefs || prefs.prefs.length === 0) return;
-
-    prefs.prefs.forEach((pos, index) => {
-      if (!posMap[pos]) return;
-      const rank = index + 1; // 1..11
-      posMap[pos].push({ member: m, rank });
-    });
-  });
-
-  const rankEmoji = {
-    1: '1️⃣',
-    2: '2️⃣',
-    3: '3️⃣',
-    4: '4️⃣',
-    5: '5️⃣',
-    6: '6️⃣',
-    7: '7️⃣',
-    8: '8️⃣',
-    9: '9️⃣',
-    10: '🔟',
-    11: '1️⃣1️⃣'
-  };
-
-  const sections = POSITIONS.map((pos) => {
-    const entries = posMap[pos];
-    if (!entries || entries.length === 0) {
-      return `**${pos}** – no data`;
-    }
-
-    // Sort by rank (1 -> 11), then by name
-    entries.sort((a, b) => {
-      if (a.rank !== b.rank) return a.rank - b.rank;
-      return a.member.displayName.localeCompare(b.member.displayName);
-    });
-
-    const lines = entries.map((e) => {
-      const emoji = rankEmoji[e.rank] || `${e.rank}.`;
-      return `${emoji} ${e.member.displayName}`;
-    });
-
-    return `**${pos}**\n${lines.join('\n')}`;
-  });
-
-  const embed = new EmbedBuilder()
-    .setTitle('Draft Helper – Position Preferences (Voice Channel)')
-    .setDescription(sections.join('\n\n'));
-
-  return interaction.reply({
-    embeds: [embed],
-    ephemeral: false
-  });
-}
+        const members = [...voiceChannel.members.values()].filter(
+          (m) => !m.user.bot
+        );
 
         if (members.length === 0) {
           return interaction.reply({
@@ -293,7 +235,7 @@ if (cmd === 'draftvc') {
       }
     }
 
-    // ===== BUTTONS (prefs panel) =====
+    // ---------- BUTTONS (prefs panel) ----------
     if (interaction.isButton()) {
       const id = interaction.customId;
 
@@ -314,6 +256,8 @@ if (cmd === 'draftvc') {
         } else {
           // Not selected → add if under 11
           if (newPrefs.length >= 11) {
+            // Use ephemeral reply, but since this is a button interaction,
+            // we need to reply separately (not update the main message)
             return interaction.reply({
               content:
                 'You already selected 11 positions. Click one of your selected positions again to remove it first.',
