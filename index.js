@@ -164,23 +164,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // /draftvc – show preferences for people in your voice channel
       if (cmd === 'draftvc') {
-        // Get the guild from cache
-        const guild = interaction.client.guilds.cache.get(interaction.guildId);
+        // interaction.guild should exist in a server
+        const guild = interaction.guild;
         if (!guild) {
-          console.error(
-            '❌ Guild not in cache for guildId:',
-            interaction.guildId
-          );
           return interaction.reply({
-            content:
-              'Bot cannot see this server in its cache yet. Try again in a few seconds.',
+            content: 'Please run this command in a server text channel (not in DMs).',
             ephemeral: true
           });
         }
 
-        // Get your voice state from the guild's voiceStates cache
-        const voiceState = guild.voiceStates.cache.get(interaction.user.id);
-        const voiceChannel = voiceState?.channel;
+        // Use interaction.member.voice to get your voice channel
+        const member = interaction.member;
+        const voiceChannel = member?.voice?.channel;
+
+        console.log('🎧 Voice debug:', {
+          hasGuild: !!guild,
+          hasMember: !!member,
+          voiceChannelId: voiceChannel?.id || null
+        });
 
         if (!voiceChannel) {
           return interaction.reply({
