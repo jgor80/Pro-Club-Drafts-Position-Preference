@@ -35,7 +35,7 @@ const POSITIONS = [
   'GK'
 ];
 
-// positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... up to 6 ], updatedAt: Date }
+// positionPrefs: Discord user ID -> { prefs: [ 'ST', 'CAM', ... up to 11 ], updatedAt: Date }
 const positionPrefs = new Map();
 
 // Build the "your prefs" embed
@@ -44,14 +44,14 @@ function buildPrefsEmbed(selected) {
   if (!selected || selected.length === 0) {
     desc =
       'No positions selected yet.\n' +
-      'Click the buttons below to add up to **6** positions in order of preference.\n' +
+      'Click the buttons below to add up to **11** positions in order of preference.\n' +
       'Click a selected position again to remove it.';
   } else {
     const lines = selected.map((p, i) => `${i + 1}. **${p}**`).join('\n');
     desc =
       'Your current preferences:\n' +
       lines +
-      '\n\nYou can click more buttons to add (up to 6) or click a selected one to remove it.';
+      '\n\nYou can click more buttons to add (up to 11) or click a selected one to remove it.';
   }
 
   return new EmbedBuilder()
@@ -171,7 +171,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           prefs.prefs.forEach((pos, index) => {
             if (!posMap[pos]) return;
-            const rank = index + 1; // 1..6
+            const rank = index + 1; // 1..11
             posMap[pos].push({ member: m, rank });
           });
         });
@@ -182,7 +182,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           3: '3️⃣',
           4: '4️⃣',
           5: '5️⃣',
-          6: '6️⃣'
+          6: '6️⃣',
+          7: '7️⃣',
+          8: '8️⃣',
+          9: '9️⃣',
+          10: '🔟',
+          11: '1️⃣1️⃣'
         };
 
         const sections = POSITIONS.map((pos) => {
@@ -191,7 +196,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return `**${pos}** – no data`;
           }
 
-          // Sort by rank (1 -> 6), then by displayName
+          // Sort by rank (1 -> 11), then by displayName
           entries.sort((a, b) => {
             if (a.rank !== b.rank) return a.rank - b.rank;
             return a.member.displayName.localeCompare(
@@ -237,11 +242,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Already selected → remove it
           newPrefs.splice(idx, 1);
         } else {
-          // Not selected → add if under 6
-          if (newPrefs.length >= 6) {
+          // Not selected → add if under 11
+          if (newPrefs.length >= 11) {
             return interaction.reply({
               content:
-                'You already selected 6 positions. Click one of your selected positions again to remove it first.',
+                'You already selected 11 positions. Click one of your selected positions again to remove it first.',
               ephemeral: true
             });
           }
