@@ -8,7 +8,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
-  MessageFlags
+  StringSelectMenuBuilder
 } = require('discord.js');
 
 const {
@@ -26,9 +26,16 @@ if (!token) {
   process.exit(1);
 }
 
-// We need Guilds + GuildVoiceStates so /posboard can see who is in your VC
+// We need:
+// - Guilds (slash commands, channels)
+// - GuildVoiceStates (for /posboard VC snapshot)
+// - GuildMembers (for /posprefs role-based boards)
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
 // Positions to track (order matters for ranking)
@@ -48,7 +55,7 @@ const POSITIONS = [
 
 const PREFS_LIMIT = POSITIONS.length;
 
-// Nice labels/emojis for visuals
+// Some nice visuals for positions
 const POSITION_META = Object.freeze({
   ST:  { emoji: '⚽', label: 'Striker' },
   RW:  { emoji: '🏃‍♂️', label: 'Right Wing' },
@@ -88,11 +95,15 @@ function isValidPosition(pos) {
 
 // Always store prefs per-guild
 function getUserPrefs(guildId, userId) {
-  return sharedGetUserPrefs(guildId, userId);
+  if (!guildId || !userId) return [];
+  const data = sharedGetUserPrefs(guildId, userId);
+  return Array.isArray(data) ? data : data || [];
 }
 
 function setUserPrefs(guildId, userId, prefs) {
-  return sharedSetUserPrefs(guildId, userId, prefs);
+  if (!guildId || !userId) return;
+  if (!Array.isArray(prefs)) prefs = [];
+  sharedSetUserPrefs(guildId, userId, prefs);
 }
 
 // Build a neat progress bar like: █████░░░░░
@@ -146,7 +157,7 @@ function buildPrefsEmbed(selected) {
         '\n\nAvailable positions:\n' +
         '`ST, RW, LW, CAM, RDM, LDM, LB, LCB, RCB, RB, GK`'
     )
-    .setFooter({ text: 'Your preferences are saved automatically.' });
+    .setFooter({ text: 'Your preferences are saved automatically per server.' });
 }
 
 // Build position buttons + control row for the ephemeral panel
@@ -193,7 +204,7 @@ function buildPrefComponents(selected) {
   return rows;
 }
 
-// Format entries for /posboard: names are clickable mentions
+// Format entries for position-based boards; names are clickable mentions
 function formatPositionEntries(entries) {
   if (!entries || entries.length === 0) {
     return '*No data yet*';
@@ -224,6 +235,118 @@ function formatPositionEntries(entries) {
   return text;
 }
 
+// Build a position prefs embed from a list of participants
+// participants: [{ member, prefs }]
+function buildPosPrefsEmbedForParticipants(guild, participants, label) {
+  const posMap = {};
+  POSITIONS.forEach((p) => (posMap[p] = []));
+
+  for (const p of participants) {
+    const userId = p.member.id;
+    p.prefs.forEach((pos, index) => {
+      if (!posMap[pos]) return;
+      const rank = index + 1;
+      posMap[pos].push({ userId, rank });
+    });
+  }
+
+  const memberById = new Map(
+    participants.map((p) => [p.member.id, p.member])
+  );
+
+  POSITIONS.forEach((pos) => {
+    const entries = posMap[pos];
+    if (!entries || entries.length === 0) return;
+    entries.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      const aMember = memberById.get(a.userId);
+      const bMember = memberById.get(b.userId);
+      const aName =
+        aMember?.displayName || aMember?.user?.username || a.userId;
+      const bName =
+        bMember?.displayName || bMember?.user?.username || b.userId;
+      return aName.localeCompare(bName);
+    });
+  });
+
+  const fields = POSITIONS.map((pos) => {
+    const meta = POSITION_META[pos];
+    const nameEmoji = meta?.emoji || '▫️';
+    const title = `${nameEmoji} ${pos}`;
+    const value = formatPositionEntries(posMap[pos]);
+    return { name: title, value, inline: true };
+  });
+
+  const isAll = !label || label === 'Entire Server';
+  const desc = isAll
+    ? `Players with saved preferences in this server: **${participants.length}**\n` +
+      'Sorted by **player preference rank** (1️⃣ = top choice).'
+    : `Filter: **${label}** • players with saved preferences: **${participants.length}**\n` +
+      'Sorted by **player preference rank** (1️⃣ = top choice).';
+
+  return new EmbedBuilder()
+    .setTitle(`🧩 Position Preferences – ${label || 'Entire Server'}`)
+    .setColor(0x5865f2)
+    .setDescription(desc)
+    .addFields(fields)
+    .setFooter({
+      text: 'Only players with saved preferences are shown.'
+    });
+}
+
+// Build a StringSelectMenu of roles that have at least one user with prefs
+function buildPosPrefsRoleSelect(guild, participants) {
+  const roleStats = new Map(); // roleId -> { role, count }
+
+  for (const { member } of participants) {
+    member.roles.cache.forEach((role) => {
+      // skip @everyone & managed/bot roles
+      if (role.id === guild.id) return;
+      if (role.managed) return;
+
+      let stat = roleStats.get(role.id);
+      if (!stat) {
+        stat = { role, count: 0 };
+        roleStats.set(role.id, stat);
+      }
+      stat.count++;
+    });
+  }
+
+  if (roleStats.size === 0) return null;
+
+  let entries = [...roleStats.values()];
+
+  // Sort by players-with-prefs desc, then by role position
+  entries.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.role.position - a.role.position;
+  });
+
+  // Up to 24 roles (Discord limit 25 options total)
+  entries = entries.slice(0, 24);
+
+  const options = [
+    {
+      label: 'Entire server',
+      value: '__ALL__',
+      description: 'Show all players with saved preferences'
+    },
+    ...entries.map((stat) => ({
+      label: stat.role.name.slice(0, 100),
+      value: stat.role.id,
+      description: `${stat.count} player(s) with prefs`
+    }))
+  ];
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('posprefs_role_select')
+    .setPlaceholder('Pick a role (or Entire server) to view the board')
+    .addOptions(options);
+
+  return new ActionRowBuilder().addComponents(select);
+}
+
 // =======================
 // READY
 // =======================
@@ -241,10 +364,15 @@ client.once(Events.ClientReady, async (c) => {
       name: 'posboard',
       description:
         'Show saved position preferences for players in your current voice channel.'
+    },
+    {
+      name: 'posprefs',
+      description:
+        'Open a role selector to view position preferences for parts of the server.'
     }
   ]);
 
-  console.log('✅ Commands registered: /pospanel, /posboard');
+  console.log('✅ Commands registered: /pospanel, /posboard, /posprefs');
 });
 
 // =======================
@@ -270,7 +398,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             'Click the button below to open your **personal position preference panel**.\n\n' +
               '• Rank up to **11** positions in order of preference.\n' +
               '• Your preferences are saved per user and per server.\n' +
-              '• Other bots (like the spot/formation bot) can auto-use these.\n\n' +
+              '• Other bots (like the spots/formation bot) can auto-use these.\n\n' +
               'Tip: Pin this message so players can easily find it.'
           );
 
@@ -294,7 +422,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({
             content:
               'Please run this command in a server text channel (not in DMs).',
-            flags: MessageFlags.Ephemeral
+            ephemeral: true
           });
         }
 
@@ -305,7 +433,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({
             content:
               'You need to be **connected to a voice channel** in this server to use `/posboard`.',
-            flags: MessageFlags.Ephemeral
+            ephemeral: true
           });
         }
 
@@ -316,7 +444,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (members.length === 0) {
           return interaction.reply({
             content: 'No players found in your voice channel.',
-            flags: MessageFlags.Ephemeral
+            ephemeral: true
           });
         }
 
@@ -335,7 +463,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        // Sort by rank then display name
+        // Sort by rank then display name per position
         POSITIONS.forEach((pos) => {
           const entries = posMap[pos];
           if (!entries || entries.length === 0) return;
@@ -376,25 +504,79 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
+      // /posprefs – show a role dropdown first (no giant board by default)
+      if (cmd === 'posprefs') {
+        const guild = interaction.guild;
+        if (!guild) {
+          return interaction.reply({
+            content:
+              'Please run this command in a server text channel (not in DMs).',
+            ephemeral: true
+          });
+        }
+
+        // Fetch all members (non-bots)
+        let members = await guild.members.fetch();
+        members = members.filter((m) => !m.user.bot);
+
+        const participants = [];
+
+        for (const m of members.values()) {
+          const prefs = getUserPrefs(guildId, m.id);
+          if (prefs && prefs.length > 0) {
+            participants.push({ member: m, prefs });
+          }
+        }
+
+        if (participants.length === 0) {
+          return interaction.reply({
+            content:
+              'No players in this server have saved position preferences yet.',
+            ephemeral: true
+          });
+        }
+
+        const row = buildPosPrefsRoleSelect(guild, participants);
+
+        const infoEmbed = new EmbedBuilder()
+          .setTitle('🧩 Position Preferences – Select Role')
+          .setColor(0x5865f2)
+          .setDescription(
+            'Use the dropdown below to view **position preference boards**.\n\n' +
+              '• Choose a **role** to see only players with that role.\n' +
+              '• Choose **Entire server** if you really want the full list (can be large).\n\n' +
+              `Players with saved preferences: **${participants.length}**`
+          )
+          .setFooter({
+            text: 'Only players with saved preferences will appear in the boards.'
+          });
+
+        return interaction.reply({
+          embeds: [infoEmbed],
+          components: row ? [row] : []
+        });
+      }
+
       // Fallback
       return interaction.reply({
         content: 'Unknown command.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     // ---------- BUTTONS ----------
     if (interaction.isButton()) {
+      const guildIdBtn = interaction.guildId;
       const id = interaction.customId;
 
       // Open personal prefs panel from the shared channel panel
       if (id === 'open_prefs') {
-        const existing = getUserPrefs(guildId, interaction.user.id);
+        const existing = getUserPrefs(guildIdBtn, interaction.user.id);
 
         return interaction.reply({
           embeds: [buildPrefsEmbed(existing)],
           components: buildPrefComponents(existing),
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
@@ -404,7 +586,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!isValidPosition(pos)) return;
 
         const userId = interaction.user.id;
-        const current = getUserPrefs(guildId, userId);
+        const current = getUserPrefs(guildIdBtn, userId);
 
         let newPrefs = [...current];
         const idx = newPrefs.indexOf(pos);
@@ -419,13 +601,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
               content:
                 `You already selected **${PREFS_LIMIT}** positions. ` +
                 'Click one of your selected positions again to remove it first.',
-              flags: MessageFlags.Ephemeral
+              ephemeral: true
             });
           }
           newPrefs.push(pos);
         }
 
-        setUserPrefs(guildId, userId, newPrefs);
+        setUserPrefs(guildIdBtn, userId, newPrefs);
 
         return interaction.update({
           embeds: [buildPrefsEmbed(newPrefs)],
@@ -435,7 +617,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // Done button: show a saved summary
       if (id === 'prefs_done') {
-        const prefs = getUserPrefs(guildId, interaction.user.id);
+        const prefs = getUserPrefs(guildIdBtn, interaction.user.id);
         const hasPrefs = prefs.length > 0;
 
         const summary = hasPrefs
@@ -468,11 +650,90 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // Clear button – wipe prefs for this guild
       if (id === 'prefs_clear') {
-        setUserPrefs(guildId, interaction.user.id, []);
+        setUserPrefs(guildIdBtn, interaction.user.id, []);
 
         return interaction.update({
           embeds: [buildPrefsEmbed([])],
           components: buildPrefComponents([])
+        });
+      }
+    }
+
+    // ---------- SELECT MENUS ----------
+    if (interaction.isStringSelectMenu()) {
+      const id = interaction.customId;
+
+      // Role filter for /posprefs
+      if (id === 'posprefs_role_select') {
+        const guild = interaction.guild;
+        const guildIdSel = guild.id;
+        const selected = interaction.values[0];
+
+        // Rebuild participants
+        let members = await guild.members.fetch();
+        members = members.filter((m) => !m.user.bot);
+
+        const participants = [];
+        for (const m of members.values()) {
+          const prefs = getUserPrefs(guildIdSel, m.id);
+          if (prefs && prefs.length > 0) {
+            participants.push({ member: m, prefs });
+          }
+        }
+
+        if (participants.length === 0) {
+          return interaction.update({
+            content:
+              'No players in this server have saved position preferences yet.',
+            embeds: [],
+            components: []
+          });
+        }
+
+        const selectedRoleId = selected === '__ALL__' ? null : selected;
+
+        const filteredParticipants = selectedRoleId
+          ? participants.filter((p) =>
+              p.member.roles.cache.has(selectedRoleId)
+            )
+          : participants;
+
+        // Build label for title/description
+        let label;
+        if (!selectedRoleId) {
+          label = 'Entire Server';
+        } else {
+          const role = guild.roles.cache.get(selectedRoleId);
+          label = role ? role.name : 'Selected Role';
+        }
+
+        if (filteredParticipants.length === 0) {
+          const emptyEmbed = new EmbedBuilder()
+            .setTitle(`🧩 Position Preferences – ${label}`)
+            .setColor(0x5865f2)
+            .setDescription(
+              `No players with saved position preferences found for **${label}**.`
+            );
+
+          const row = buildPosPrefsRoleSelect(guild, participants);
+
+          return interaction.update({
+            embeds: [emptyEmbed],
+            components: row ? [row] : []
+          });
+        }
+
+        const embed = buildPosPrefsEmbedForParticipants(
+          guild,
+          filteredParticipants,
+          label
+        );
+
+        const row = buildPosPrefsRoleSelect(guild, participants);
+
+        return interaction.update({
+          embeds: [embed],
+          components: row ? [row] : []
         });
       }
     }
@@ -483,7 +744,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: `Error: ${err.message || 'something went wrong.'}`,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
     } catch (e) {
